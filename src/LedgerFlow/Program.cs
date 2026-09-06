@@ -1,11 +1,43 @@
-using System.Collections.Concurrent;
+using LedgerFlow.Application;
+using LedgerFlow.Domain;
+using LedgerFlow.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddSingleton<TransactionStore>();
+
+var isTesting = builder.Environment.IsEnvironment("Testing");
+
+builder.Services.AddDbContext<LedgerFlowDbContext>(options =>
+{
+    if (isTesting)
+    {
+        options.UseInMemoryDatabase("LedgerFlowTests");
+        return;
+    }
+
+    var connectionString = builder.Configuration.GetConnectionString("LedgerFlow")
+        ?? throw new InvalidOperationException("ConnectionStrings:LedgerFlow is required.");
+
+    options.UseNpgsql(connectionString);
+});
+
+builder.Services.AddScoped<ITransactionRepository, TransactionRepository>();
+builder.Services.AddScoped<TransactionService>();
 
 var app = builder.Build();
 
-app.MapPost("/transactions", (CreateTransactionRequest request, HttpRequest httpRequest, TransactionStore store) =>
+if (!isTesting)
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<LedgerFlowDbContext>();
+    db.Database.Migrate();
+}
+
+app.MapPost("/transactions", async (
+    CreateTransactionRequest request,
+    HttpRequest httpRequest,
+    TransactionService service,
+    CancellationToken cancellationToken) =>
 {
     var idempotencyKey = httpRequest.Headers["Idempotency-Key"].FirstOrDefault();
     if (string.IsNullOrWhiteSpace(idempotencyKey))
@@ -13,43 +45,35 @@ app.MapPost("/transactions", (CreateTransactionRequest request, HttpRequest http
         return Results.BadRequest(new { error = "Idempotency-Key header is required." });
     }
 
-    if (request.Amount <= 0 || string.IsNullOrWhiteSpace(request.FromAccount) || string.IsNullOrWhiteSpace(request.ToAccount))
+    try
     {
-        return Results.BadRequest(new { error = "Amount must be positive and both accounts are required." });
-    }
+        var result = await service.CreateAsync(
+            new CreateTransactionCommand(
+                request.FromAccount,
+                request.ToAccount,
+                request.Amount,
+                request.Currency,
+                idempotencyKey),
+            cancellationToken);
 
-    if (request.FromAccount == request.ToAccount)
+        return result.AlreadyExisted
+            ? Results.Ok(result.Transaction)
+            : Results.Created($"/transactions/{result.Transaction.Id}", result.Transaction);
+    }
+    catch (DomainValidationException exception)
     {
-        return Results.BadRequest(new { error = "Source and destination accounts must differ." });
+        return Results.BadRequest(new { error = exception.Message });
     }
-
-    if (store.TryGetByIdempotencyKey(idempotencyKey, out var existing))
-    {
-        return Results.Ok(existing);
-    }
-
-    var transaction = new Transaction(
-        Guid.NewGuid(),
-        request.FromAccount,
-        request.ToAccount,
-        request.Amount,
-        request.Currency,
-        TransactionStatus.Completed,
-        DateTimeOffset.UtcNow,
-        idempotencyKey,
-        [
-            new LedgerEntry(request.FromAccount, EntryType.Debit, request.Amount, request.Currency),
-            new LedgerEntry(request.ToAccount, EntryType.Credit, request.Amount, request.Currency)
-        ]);
-
-    store.Add(transaction);
-    return Results.Created($"/transactions/{transaction.Id}", transaction);
 });
 
-app.MapGet("/transactions/{id:guid}", (Guid id, TransactionStore store) =>
-    store.TryGet(id, out var transaction)
-        ? Results.Ok(transaction)
-        : Results.NotFound());
+app.MapGet("/transactions/{id:guid}", async (
+    Guid id,
+    TransactionService service,
+    CancellationToken cancellationToken) =>
+{
+    var transaction = await service.GetAsync(id, cancellationToken);
+    return transaction is null ? Results.NotFound() : Results.Ok(transaction);
+});
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
@@ -57,55 +81,8 @@ app.Run();
 
 public partial class Program;
 
-public record CreateTransactionRequest(string FromAccount, string ToAccount, decimal Amount, string Currency = "USD");
-
-public record Transaction(
-    Guid Id,
+public sealed record CreateTransactionRequest(
     string FromAccount,
     string ToAccount,
     decimal Amount,
-    string Currency,
-    TransactionStatus Status,
-    DateTimeOffset CreatedAt,
-    string IdempotencyKey,
-    IReadOnlyList<LedgerEntry> LedgerEntries);
-
-public record LedgerEntry(string AccountId, EntryType Type, decimal Amount, string Currency);
-
-public enum TransactionStatus
-{
-    Pending,
-    Processing,
-    Completed,
-    Failed
-}
-
-public enum EntryType
-{
-    Debit,
-    Credit
-}
-
-public sealed class TransactionStore
-{
-    private readonly ConcurrentDictionary<Guid, Transaction> transactions = new();
-    private readonly ConcurrentDictionary<string, Guid> idempotencyKeys = new(StringComparer.Ordinal);
-
-    public void Add(Transaction transaction)
-    {
-        if (!idempotencyKeys.TryAdd(transaction.IdempotencyKey, transaction.Id))
-        {
-            return;
-        }
-
-        transactions[transaction.Id] = transaction;
-    }
-
-    public bool TryGet(Guid id, out Transaction? transaction) => transactions.TryGetValue(id, out transaction);
-
-    public bool TryGetByIdempotencyKey(string key, out Transaction? transaction)
-    {
-        transaction = null;
-        return idempotencyKeys.TryGetValue(key, out var id) && transactions.TryGetValue(id, out transaction);
-    }
-}
+    string Currency = "USD");

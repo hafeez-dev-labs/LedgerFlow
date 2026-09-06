@@ -1,15 +1,16 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
 namespace LedgerFlow.Tests;
 
-public class TransactionApiTests : IClassFixture<WebApplicationFactory<Program>>
+public class TransactionApiTests : IClassFixture<TestingWebApplicationFactory>
 {
     private readonly HttpClient client;
 
-    public TransactionApiTests(WebApplicationFactory<Program> factory)
+    public TransactionApiTests(TestingWebApplicationFactory factory)
     {
         client = factory.CreateClient();
     }
@@ -77,4 +78,9 @@ public class TransactionApiTests : IClassFixture<WebApplicationFactory<Program>>
 
     private sealed record TransactionResponse(Guid Id, List<LedgerEntryResponse> LedgerEntries);
     private sealed record LedgerEntryResponse(string AccountId, int Type, decimal Amount, string Currency);
+}
+
+public sealed class TestingWebApplicationFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder) => builder.UseEnvironment("Testing");
 }

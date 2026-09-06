@@ -49,21 +49,27 @@ Observability
 
 ### Phase 1 — Transaction Processing Foundation ✅
 
-The first implementation is complete and merged. It currently provides:
+The first implementation is complete and merged. It established the initial transaction API, validation, idempotency behavior, lifecycle representation, balanced double-entry ledger creation, health endpoint, and automated API tests.
 
-- ASP.NET Core Web API
-- Transaction creation API
-- Transaction lookup API
-- Request validation
-- Required `Idempotency-Key` handling
-- Transaction lifecycle states
-- In-memory transaction storage
-- Basic double-entry ledger
-- Balanced debit and credit entries
-- Health endpoint
-- Automated API tests
+### Phase 2 — Domain & Persistent Ledger 🚧
 
-Current API surface:
+Phase 2 replaces the process-local in-memory store with an explicit financial domain and PostgreSQL-backed persistence.
+
+Current Phase 2 implementation includes:
+
+- Explicit `Account`, `Transaction`, and `LedgerEntry` domain models
+- Domain validation for amounts, accounts, currencies, and idempotency keys
+- PostgreSQL persistence through Entity Framework Core and Npgsql
+- Transaction and journal-entry persistence in a single database transaction
+- Unique database constraint for idempotency keys
+- Database checks for positive amounts and distinct source/destination accounts
+- Foreign-key constraints for account and transaction relationships
+- Immutable posted journal entries enforced by a PostgreSQL trigger
+- Deferred PostgreSQL balance validation for double-entry journal entries
+- Local PostgreSQL development environment through Docker Compose
+- Persistence and domain invariant test coverage
+
+Current API surface remains:
 
 ```text
 POST /transactions
@@ -86,7 +92,7 @@ Content-Type: application/json
 }
 ```
 
-A successful transaction creates two ledger entries:
+A successful transaction creates two journal entries:
 
 ```text
 customer-001   Debit   100.50 USD
@@ -97,17 +103,27 @@ Net: 0.00 USD
 
 ## Running Locally
 
+Start PostgreSQL:
+
+```bash
+docker compose up -d postgres
+```
+
 Run the API:
 
 ```bash
 dotnet run --project src/LedgerFlow
 ```
 
+The application applies the PostgreSQL migration on startup.
+
 Run the tests:
 
 ```bash
 dotnet test
 ```
+
+The test suite uses an isolated EF Core in-memory provider so API and domain tests do not require a running database.
 
 The application exposes a health endpoint at `GET /health`.
 
@@ -117,22 +133,35 @@ The application exposes a health endpoint at `GET /health`.
 LedgerFlow/
 ├── src/
 │   └── LedgerFlow/
+│       ├── Application/
+│       │   └── TransactionService.cs
+│       ├── Domain/
+│       │   └── DomainModels.cs
+│       ├── Infrastructure/
+│       │   ├── LedgerFlowDbContext.cs
+│       │   └── TransactionRepository.cs
+│       ├── Migrations/
+│       │   └── 202609061830_InitialPersistentLedger.cs
 │       ├── LedgerFlow.csproj
-│       └── Program.cs
+│       ├── Program.cs
+│       └── appsettings.json
 ├── tests/
 │   └── LedgerFlow.Tests/
-│       ├── LedgerFlow.Tests.csproj
-│       └── TransactionApiTests.cs
+│       ├── PersistentLedgerTests.cs
+│       ├── TransactionApiTests.cs
+│       ├── TransactionDomainTests.cs
+│       └── LedgerFlow.Tests.csproj
+├── docker-compose.yml
 └── README.md
 ```
 
-The current implementation intentionally keeps the first increment small. The architecture will be decomposed into clearer domain, application, infrastructure, and API boundaries as the system grows.
+The implementation is intentionally decomposed into domain, application, infrastructure, API, and test boundaries so later phases can build on stable financial primitives.
 
 # Roadmap / TBD
 
 The following capabilities are planned as incremental work under the LedgerFlow epic.
 
-## Phase 2 — Domain & Persistent Ledger ⬜
+## Phase 2 — Domain & Persistent Ledger 🚧
 
 - Introduce explicit domain models and invariants
 - Replace in-memory storage with PostgreSQL
@@ -283,11 +312,12 @@ Current coverage includes:
 - Balanced debit/credit ledger creation
 - Idempotency behavior
 - Invalid amount validation
+- Domain-level financial invariants
+- Persistence of transactions and journal entries
 
 Future coverage will include:
 
-- Financial invariants
-- Concurrent idempotency
+- Concurrent idempotency against PostgreSQL
 - State-machine transitions
 - Duplicate events
 - Out-of-order events

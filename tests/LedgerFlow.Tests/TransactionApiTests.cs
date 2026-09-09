@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using LedgerFlow.Domain;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
@@ -63,6 +64,82 @@ public class TransactionApiTests : IClassFixture<TestingWebApplicationFactory>
     }
 
     [Fact]
+    public async Task TransactionLifecycle_RecordsCompletedTransitions()
+    {
+        var createRequest = new HttpRequestMessage(HttpMethod.Post, "/transactions")
+        {
+            Content = JsonContent.Create(new
+            {
+                fromAccount = "customer-002",
+                toAccount = "merchant-002",
+                amount = 50m,
+                currency = "USD"
+            })
+        };
+        createRequest.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+
+        var createResponse = await client.SendAsync(createRequest);
+        var created = await createResponse.Content.ReadFromJsonAsync<TransactionResponse>();
+
+        var processingResponse = await client.PostAsJsonAsync(
+            $"/transactions/{created!.Id}/transitions",
+            new { status = TransactionStatus.Processing });
+        var completedResponse = await client.PostAsJsonAsync(
+            $"/transactions/{created.Id}/transitions",
+            new { status = TransactionStatus.Completed });
+
+        var transaction = await completedResponse.Content.ReadFromJsonAsync<TransactionResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, processingResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, completedResponse.StatusCode);
+        Assert.NotNull(transaction);
+        Assert.Equal(TransactionStatus.Completed, transaction!.Status);
+        Assert.Equal(2, transaction.StateTransitions.Count);
+        Assert.Equal(TransactionStatus.Pending, transaction.StateTransitions[0].FromStatus);
+        Assert.Equal(TransactionStatus.Processing, transaction.StateTransitions[0].ToStatus);
+        Assert.Equal(TransactionStatus.Processing, transaction.StateTransitions[1].FromStatus);
+        Assert.Equal(TransactionStatus.Completed, transaction.StateTransitions[1].ToStatus);
+    }
+
+    [Fact]
+    public async Task FailedTransaction_RequiresReasonAndBecomesTerminal()
+    {
+        var createRequest = new HttpRequestMessage(HttpMethod.Post, "/transactions")
+        {
+            Content = JsonContent.Create(new
+            {
+                fromAccount = "customer-003",
+                toAccount = "merchant-003",
+                amount = 75m,
+                currency = "USD"
+            })
+        };
+        createRequest.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+
+        var createResponse = await client.SendAsync(createRequest);
+        var created = await createResponse.Content.ReadFromJsonAsync<TransactionResponse>();
+
+        var processingResponse = await client.PostAsJsonAsync(
+            $"/transactions/{created!.Id}/transitions",
+            new { status = TransactionStatus.Processing });
+        var failedResponse = await client.PostAsJsonAsync(
+            $"/transactions/{created.Id}/transitions",
+            new { status = TransactionStatus.Failed, failureReason = "Insufficient funds" });
+        var repeatedResponse = await client.PostAsJsonAsync(
+            $"/transactions/{created.Id}/transitions",
+            new { status = TransactionStatus.Processing });
+
+        var transaction = await failedResponse.Content.ReadFromJsonAsync<TransactionResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, processingResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, failedResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, repeatedResponse.StatusCode);
+        Assert.NotNull(transaction);
+        Assert.Equal(TransactionStatus.Failed, transaction!.Status);
+        Assert.Equal("Insufficient funds", transaction.StateTransitions[1].FailureReason);
+    }
+
+    [Fact]
     public async Task InvalidTransaction_IsRejected()
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/transactions")
@@ -76,8 +153,18 @@ public class TransactionApiTests : IClassFixture<TestingWebApplicationFactory>
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
-    private sealed record TransactionResponse(Guid Id, List<LedgerEntryResponse> LedgerEntries);
+    private sealed record TransactionResponse(
+        Guid Id,
+        TransactionStatus Status,
+        List<LedgerEntryResponse> LedgerEntries,
+        List<StateTransitionResponse> StateTransitions);
+
     private sealed record LedgerEntryResponse(string AccountId, int Type, decimal Amount, string Currency);
+    private sealed record StateTransitionResponse(
+        TransactionStatus FromStatus,
+        TransactionStatus ToStatus,
+        DateTimeOffset TransitionedAt,
+        string? FailureReason);
 }
 
 public sealed class TestingWebApplicationFactory : WebApplicationFactory<Program>

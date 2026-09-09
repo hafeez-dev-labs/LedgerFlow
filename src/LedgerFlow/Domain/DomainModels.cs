@@ -16,6 +16,41 @@ public enum EntryType
 
 public sealed class DomainValidationException(string message) : Exception(message);
 
+public sealed class TransactionStateTransition
+{
+    private TransactionStateTransition() { }
+
+    private TransactionStateTransition(
+        Guid transactionId,
+        TransactionStatus fromStatus,
+        TransactionStatus toStatus,
+        DateTimeOffset transitionedAt,
+        string? failureReason)
+    {
+        Id = Guid.NewGuid();
+        TransactionId = transactionId;
+        FromStatus = fromStatus;
+        ToStatus = toStatus;
+        TransitionedAt = transitionedAt;
+        FailureReason = failureReason;
+    }
+
+    public Guid Id { get; private set; }
+    public Guid TransactionId { get; private set; }
+    public TransactionStatus FromStatus { get; private set; }
+    public TransactionStatus ToStatus { get; private set; }
+    public DateTimeOffset TransitionedAt { get; private set; }
+    public string? FailureReason { get; private set; }
+
+    internal static TransactionStateTransition Create(
+        Guid transactionId,
+        TransactionStatus fromStatus,
+        TransactionStatus toStatus,
+        DateTimeOffset transitionedAt,
+        string? failureReason) =>
+        new(transactionId, fromStatus, toStatus, transitionedAt, failureReason);
+}
+
 public sealed class Account
 {
     private Account() { }
@@ -93,7 +128,7 @@ public sealed class Transaction
         ToAccountId = toAccount;
         Amount = decimal.Round(amount, 4, MidpointRounding.ToEven);
         Currency = NormalizeCurrency(currency);
-        Status = TransactionStatus.Completed;
+        Status = TransactionStatus.Pending;
         CreatedAt = DateTimeOffset.UtcNow;
         IdempotencyKey = idempotencyKey;
     }
@@ -107,6 +142,7 @@ public sealed class Transaction
     public DateTimeOffset CreatedAt { get; private set; }
     public string IdempotencyKey { get; private set; } = null!;
     public List<LedgerEntry> LedgerEntries { get; private set; } = [];
+    public List<TransactionStateTransition> StateTransitions { get; private set; } = [];
 
     public static Transaction Create(
         string fromAccount,
@@ -147,6 +183,43 @@ public sealed class Transaction
         transaction.EnsureBalanced();
         return transaction;
     }
+
+    public void TransitionTo(TransactionStatus targetStatus, string? failureReason = null)
+    {
+        if (!IsValidTransition(Status, targetStatus))
+        {
+            throw new DomainValidationException($"Invalid transaction transition: {Status} -> {targetStatus}.");
+        }
+
+        if (targetStatus == TransactionStatus.Failed && string.IsNullOrWhiteSpace(failureReason))
+        {
+            throw new DomainValidationException("Failure reason is required when a transaction fails.");
+        }
+
+        if (targetStatus != TransactionStatus.Failed && !string.IsNullOrWhiteSpace(failureReason))
+        {
+            throw new DomainValidationException("Failure reason is only valid for a failed transaction.");
+        }
+
+        var normalizedReason = targetStatus == TransactionStatus.Failed ? failureReason!.Trim() : null;
+        var previousStatus = Status;
+        Status = targetStatus;
+        StateTransitions.Add(TransactionStateTransition.Create(
+            Id,
+            previousStatus,
+            targetStatus,
+            DateTimeOffset.UtcNow,
+            normalizedReason));
+    }
+
+    private static bool IsValidTransition(TransactionStatus currentStatus, TransactionStatus targetStatus) =>
+        (currentStatus, targetStatus) switch
+        {
+            (TransactionStatus.Pending, TransactionStatus.Processing) => true,
+            (TransactionStatus.Processing, TransactionStatus.Completed) => true,
+            (TransactionStatus.Processing, TransactionStatus.Failed) => true,
+            _ => false
+        };
 
     private void EnsureBalanced()
     {

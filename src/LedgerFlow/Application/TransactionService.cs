@@ -89,8 +89,22 @@ public sealed class TransactionService(
         }
     }
 
-    public Task<Transaction?> GetAsync(Guid id, CancellationToken cancellationToken) =>
-        transactions.GetByIdAsync(id, cancellationToken);
+    public async Task<Transaction?> GetAsync(Guid id, CancellationToken cancellationToken) =>
+        await transactions.GetByIdAsync(id, cancellationToken);
+
+    public async Task<Transaction> TransitionAsync(
+        Guid id,
+        TransactionStatus targetStatus,
+        string? failureReason,
+        CancellationToken cancellationToken)
+    {
+        var transaction = await transactions.GetByIdAsync(id, cancellationToken)
+            ?? throw new DomainValidationException($"Transaction '{id}' was not found.");
+
+        transaction.TransitionTo(targetStatus, failureReason);
+        await db.SaveChangesAsync(cancellationToken);
+        return transaction;
+    }
 
     private async Task EnsureAccountAsync(string accountId, string currency, CancellationToken cancellationToken)
     {

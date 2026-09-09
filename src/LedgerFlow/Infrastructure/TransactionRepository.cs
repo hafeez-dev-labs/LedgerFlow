@@ -15,11 +15,13 @@ public sealed class TransactionRepository(LedgerFlowDbContext db) : ITransaction
     public Task<Transaction?> GetByIdAsync(Guid id, CancellationToken cancellationToken) =>
         db.Transactions
             .Include(transaction => transaction.LedgerEntries)
+            .Include(transaction => transaction.StateTransitions)
             .SingleOrDefaultAsync(transaction => transaction.Id == id, cancellationToken);
 
     public Task<Transaction?> GetByIdempotencyKeyAsync(string idempotencyKey, CancellationToken cancellationToken) =>
         db.Transactions
             .Include(transaction => transaction.LedgerEntries)
+            .Include(transaction => transaction.StateTransitions)
             .SingleOrDefaultAsync(transaction => transaction.IdempotencyKey == idempotencyKey, cancellationToken);
 
     public void Add(Transaction transaction) => db.Transactions.Add(transaction);

@@ -8,6 +8,7 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
+    public DbSet<TransactionStateTransition> TransactionStateTransitions => Set<TransactionStateTransition>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,6 +37,7 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
             entity.HasOne<Account>().WithMany().HasForeignKey(transaction => transaction.FromAccountId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Account>().WithMany().HasForeignKey(transaction => transaction.ToAccountId).OnDelete(DeleteBehavior.Restrict);
             entity.HasMany(transaction => transaction.LedgerEntries).WithOne().HasForeignKey(entry => entry.TransactionId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasMany(transaction => transaction.StateTransitions).WithOne().HasForeignKey(transition => transition.TransactionId).OnDelete(DeleteBehavior.Restrict);
             entity.HasCheckConstraint("ck_transactions_amount_positive", "amount > 0");
             entity.HasCheckConstraint("ck_transactions_distinct_accounts", "from_account_id <> to_account_id");
             entity.HasCheckConstraint("ck_transactions_currency_length", "char_length(currency) = 3");
@@ -53,6 +55,17 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
             entity.HasOne<Account>().WithMany().HasForeignKey(entry => entry.AccountId).OnDelete(DeleteBehavior.Restrict);
             entity.HasCheckConstraint("ck_journal_entries_amount_positive", "amount > 0");
             entity.HasCheckConstraint("ck_journal_entries_currency_length", "char_length(currency) = 3");
+        });
+
+        modelBuilder.Entity<TransactionStateTransition>(entity =>
+        {
+            entity.ToTable("transaction_state_transitions");
+            entity.HasKey(transition => transition.Id);
+            entity.Property(transition => transition.FromStatus).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(transition => transition.ToStatus).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(transition => transition.TransitionedAt).IsRequired();
+            entity.Property(transition => transition.FailureReason).HasMaxLength(1000);
+            entity.HasIndex(transition => new { transition.TransactionId, transition.TransitionedAt });
         });
     }
 }

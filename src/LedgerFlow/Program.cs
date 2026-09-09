@@ -66,6 +66,28 @@ app.MapPost("/transactions", async (
     }
 });
 
+app.MapPost("/transactions/{id:guid}/transitions", async (
+    Guid id,
+    TransitionTransactionRequest request,
+    TransactionService service,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var transaction = await service.TransitionAsync(
+            id,
+            request.Status,
+            request.FailureReason,
+            cancellationToken);
+
+        return Results.Ok(transaction);
+    }
+    catch (DomainValidationException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+});
+
 app.MapGet("/transactions/{id:guid}", async (
     Guid id,
     TransactionService service,
@@ -86,3 +108,7 @@ public sealed record CreateTransactionRequest(
     string ToAccount,
     decimal Amount,
     string Currency = "USD");
+
+public sealed record TransitionTransactionRequest(
+    TransactionStatus Status,
+    string? FailureReason = null);

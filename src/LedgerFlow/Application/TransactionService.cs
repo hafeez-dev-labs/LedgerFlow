@@ -55,6 +55,7 @@ public sealed class TransactionService(
                 normalizedKey);
 
             transactions.Add(transaction);
+            AddEvent(transaction, transaction.Status, null);
 
             try
             {
@@ -98,12 +99,47 @@ public sealed class TransactionService(
         string? failureReason,
         CancellationToken cancellationToken)
     {
-        var transaction = await transactions.GetByIdAsync(id, cancellationToken)
-            ?? throw new DomainValidationException($"Transaction '{id}' was not found.");
+        IDbContextTransaction? databaseTransaction = null;
+        if (!db.Database.IsInMemory())
+        {
+            databaseTransaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        }
 
-        transaction.TransitionTo(targetStatus, failureReason);
-        await db.SaveChangesAsync(cancellationToken);
-        return transaction;
+        try
+        {
+            var transaction = await transactions.GetByIdAsync(id, cancellationToken)
+                ?? throw new DomainValidationException($"Transaction '{id}' was not found.");
+
+            transaction.TransitionTo(targetStatus, failureReason);
+            AddEvent(transaction, targetStatus, failureReason);
+            await db.SaveChangesAsync(cancellationToken);
+
+            if (databaseTransaction is not null)
+            {
+                await databaseTransaction.CommitAsync(cancellationToken);
+            }
+
+            return transaction;
+        }
+        finally
+        {
+            if (databaseTransaction is not null)
+            {
+                await databaseTransaction.DisposeAsync();
+            }
+        }
+    }
+
+    private void AddEvent(Transaction transaction, TransactionStatus status, string? failureReason)
+    {
+        var transactionEvent = new TransactionEvent(
+            Guid.NewGuid(),
+            transaction.Id,
+            status,
+            DateTimeOffset.UtcNow,
+            failureReason);
+
+        db.OutboxMessages.Add(new OutboxMessage(transactionEvent));
     }
 
     private async Task EnsureAccountAsync(string accountId, string currency, CancellationToken cancellationToken)

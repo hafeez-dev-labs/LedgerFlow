@@ -9,6 +9,8 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
     public DbSet<TransactionStateTransition> TransactionStateTransitions => Set<TransactionStateTransition>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -66,6 +68,28 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
             entity.Property(transition => transition.TransitionedAt).IsRequired();
             entity.Property(transition => transition.FailureReason).HasMaxLength(1000);
             entity.HasIndex(transition => new { transition.TransactionId, transition.TransitionedAt });
+        });
+
+        modelBuilder.Entity<OutboxMessage>(entity =>
+        {
+            entity.ToTable("outbox_messages");
+            entity.HasKey(message => message.Id);
+            entity.Property(message => message.EventType).HasMaxLength(200).IsRequired();
+            entity.Property(message => message.AggregateId).IsRequired();
+            entity.Property(message => message.Payload).IsRequired();
+            entity.Property(message => message.OccurredAt).IsRequired();
+            entity.Property(message => message.PublishedAt);
+            entity.HasIndex(message => new { message.PublishedAt, message.OccurredAt });
+        });
+
+        modelBuilder.Entity<ProcessedEvent>(entity =>
+        {
+            entity.ToTable("processed_events");
+            entity.HasKey(eventRecord => eventRecord.Id);
+            entity.Property(eventRecord => eventRecord.EventType).HasMaxLength(200).IsRequired();
+            entity.Property(eventRecord => eventRecord.AggregateId).IsRequired();
+            entity.Property(eventRecord => eventRecord.ProcessedAt).IsRequired();
+            entity.HasIndex(eventRecord => new { eventRecord.AggregateId, eventRecord.ProcessedAt });
         });
     }
 }

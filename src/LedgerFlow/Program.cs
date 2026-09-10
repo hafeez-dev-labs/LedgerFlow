@@ -23,6 +23,15 @@ builder.Services.AddDbContext<LedgerFlowDbContext>(options =>
 
 builder.Services.AddScoped<ITransactionRepository, TransactionRepository>();
 builder.Services.AddScoped<TransactionService>();
+builder.Services.AddScoped<OutboxPublisher>();
+builder.Services.AddScoped<IEventConsumer, TransactionEventConsumer>();
+builder.Services.AddSingleton<IEventBroker, InMemoryEventBroker>();
+
+if (!isTesting)
+{
+    builder.Services.AddHostedService<OutboxPublisherWorker>();
+    builder.Services.AddHostedService<EventConsumerWorker>();
+}
 
 var app = builder.Build();
 

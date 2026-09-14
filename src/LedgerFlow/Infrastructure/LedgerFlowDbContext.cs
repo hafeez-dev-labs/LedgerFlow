@@ -11,6 +11,8 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
     public DbSet<TransactionStateTransition> TransactionStateTransitions => Set<TransactionStateTransition>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
+    public DbSet<RetrySchedule> RetrySchedules => Set<RetrySchedule>();
+    public DbSet<DeadLetterRecord> DeadLetterRecords => Set<DeadLetterRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -90,6 +92,33 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
             entity.Property(eventRecord => eventRecord.AggregateId).IsRequired();
             entity.Property(eventRecord => eventRecord.ProcessedAt).IsRequired();
             entity.HasIndex(eventRecord => new { eventRecord.AggregateId, eventRecord.ProcessedAt });
+        });
+
+        modelBuilder.Entity<RetrySchedule>(entity =>
+        {
+            entity.ToTable("retry_schedules");
+            entity.HasKey(schedule => schedule.Id);
+            entity.Property(schedule => schedule.AttemptCount).IsRequired();
+            entity.Property(schedule => schedule.MaxAttempts).IsRequired();
+            entity.Property(schedule => schedule.NextAttemptAt);
+            entity.Property(schedule => schedule.LastFailureReason).HasMaxLength(1000);
+            entity.Property(schedule => schedule.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(schedule => schedule.ResolvedAt);
+            entity.HasIndex(schedule => schedule.TransactionId).IsUnique();
+            entity.HasOne<Transaction>().WithMany().HasForeignKey(schedule => schedule.TransactionId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(schedule => new { schedule.Status, schedule.NextAttemptAt });
+        });
+
+        modelBuilder.Entity<DeadLetterRecord>(entity =>
+        {
+            entity.ToTable("dead_letter_records");
+            entity.HasKey(record => record.Id);
+            entity.Property(record => record.RetryAttempts).IsRequired();
+            entity.Property(record => record.FailureReason).HasMaxLength(1000).IsRequired();
+            entity.Property(record => record.FailedAt).IsRequired();
+            entity.Property(record => record.ResolvedAt);
+            entity.HasIndex(record => record.TransactionId).IsUnique();
+            entity.HasOne<Transaction>().WithMany().HasForeignKey(record => record.TransactionId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

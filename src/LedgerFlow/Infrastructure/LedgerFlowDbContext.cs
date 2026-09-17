@@ -13,6 +13,8 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
     public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
     public DbSet<RetrySchedule> RetrySchedules => Set<RetrySchedule>();
     public DbSet<DeadLetterRecord> DeadLetterRecords => Set<DeadLetterRecord>();
+    public DbSet<ReconciliationRun> ReconciliationRuns => Set<ReconciliationRun>();
+    public DbSet<ReconciliationResult> ReconciliationResults => Set<ReconciliationResult>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -119,6 +121,31 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
             entity.Property(record => record.ResolvedAt);
             entity.HasIndex(record => record.TransactionId).IsUnique();
             entity.HasOne<Transaction>().WithMany().HasForeignKey(record => record.TransactionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ReconciliationRun>(entity =>
+        {
+            entity.ToTable("reconciliation_runs");
+            entity.HasKey(run => run.Id);
+            entity.Property(run => run.IdempotencyKey).HasMaxLength(200).IsRequired();
+            entity.Property(run => run.StartedAt).IsRequired();
+            entity.Property(run => run.CompletedAt);
+            entity.HasIndex(run => run.IdempotencyKey).IsUnique();
+            entity.HasMany(run => run.Results).WithOne().HasForeignKey(result => result.ReconciliationRunId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ReconciliationResult>(entity =>
+        {
+            entity.ToTable("reconciliation_results");
+            entity.HasKey(result => result.Id);
+            entity.Property(result => result.Status).HasConversion<string>().HasMaxLength(30).IsRequired();
+            entity.Property(result => result.ExternalTransactionId).HasMaxLength(200);
+            entity.Property(result => result.InternalAmount).HasPrecision(19, 4);
+            entity.Property(result => result.ExternalAmount).HasPrecision(19, 4);
+            entity.Property(result => result.InternalCurrency).HasColumnType("varchar(3)");
+            entity.Property(result => result.ExternalCurrency).HasColumnType("varchar(3)");
+            entity.Property(result => result.Explanation).HasMaxLength(1000).IsRequired();
+            entity.HasIndex(result => new { result.ReconciliationRunId, result.Status });
         });
     }
 }

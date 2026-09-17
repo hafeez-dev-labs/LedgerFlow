@@ -22,6 +22,7 @@ builder.Services.AddDbContext<LedgerFlowDbContext>(options =>
 builder.Services.AddScoped<ITransactionRepository, TransactionRepository>();
 builder.Services.AddScoped<TransactionService>();
 builder.Services.AddScoped<RetryService>();
+builder.Services.AddScoped<ReconciliationService>();
 builder.Services.AddScoped<OutboxPublisher>();
 builder.Services.AddScoped<IEventConsumer, TransactionEventConsumer>();
 builder.Services.AddSingleton<IEventBroker, InMemoryEventBroker>();
@@ -91,6 +92,24 @@ app.MapGet("/transactions/{id:guid}", async (Guid id, TransactionService service
     return transaction is null ? Results.NotFound() : Results.Ok(transaction);
 });
 
+app.MapPost("/reconciliation", async (ReconciliationRequest request, HttpRequest httpRequest, ReconciliationService service, CancellationToken cancellationToken) =>
+{
+    var idempotencyKey = httpRequest.Headers["Idempotency-Key"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(idempotencyKey)) return Results.BadRequest(new { error = "Idempotency-Key header is required." });
+    try
+    {
+        var run = await service.ReconcileAsync(request.Records, idempotencyKey, cancellationToken);
+        return Results.Ok(run);
+    }
+    catch (DomainValidationException exception) { return Results.BadRequest(new { error = exception.Message }); }
+});
+
+app.MapGet("/reconciliation/{id:guid}", async (Guid id, ReconciliationService service, CancellationToken cancellationToken) =>
+{
+    var run = await service.GetAsync(id, cancellationToken);
+    return run is null ? Results.NotFound() : Results.Ok(run);
+});
+
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.Run();
 
@@ -98,3 +117,4 @@ public partial class Program;
 
 public sealed record CreateTransactionRequest(string FromAccount, string ToAccount, decimal Amount, string Currency = "USD");
 public sealed record TransitionTransactionRequest(TransactionStatus Status, string? FailureReason = null);
+public sealed record ReconciliationRequest(IReadOnlyList<ExternalSettlementRecord> Records);

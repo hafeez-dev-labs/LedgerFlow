@@ -47,59 +47,61 @@ Observability
 
 ## Current Implementation
 
-### Phase 1 — Transaction Processing Foundation ✅
+### Phases 1–5 — Transaction Processing Foundation, Persistent Ledger, State Machine, Events/Outbox, and Retry Recovery ✅
 
-The first implementation is complete and merged. It established the initial transaction API, validation, idempotency behavior, lifecycle representation, balanced double-entry ledger creation, health endpoint, and automated API tests.
+The first five phases are complete and merged. They establish the transaction API, validation, idempotency, balanced double-entry ledger creation, PostgreSQL persistence, explicit transaction state transitions, transactional outbox processing, retry scheduling, bounded backoff, and dead-letter recovery.
 
-### Phase 2 — Domain & Persistent Ledger 🚧
+### Phase 6 — Reconciliation Engine ✅
 
-Phase 2 replaces the process-local in-memory store with an explicit financial domain and PostgreSQL-backed persistence.
+Phase 6 adds a durable reconciliation engine that compares completed internal transactions against an external settlement/input source.
 
-Current Phase 2 implementation includes:
+Current reconciliation capabilities include:
 
-- Explicit `Account`, `Transaction`, and `LedgerEntry` domain models
-- Domain validation for amounts, accounts, currencies, and idempotency keys
-- PostgreSQL persistence through Entity Framework Core and Npgsql
-- Transaction and journal-entry persistence in a single database transaction
-- Unique database constraint for idempotency keys
-- Database checks for positive amounts and distinct source/destination accounts
-- Foreign-key constraints for account and transaction relationships
-- Immutable posted journal entries enforced by a PostgreSQL trigger
-- Deferred PostgreSQL balance validation for double-entry journal entries
-- Local PostgreSQL development environment through Docker Compose
-- Persistence and domain invariant test coverage
+- Deterministic matching by internal transaction identifier
+- Matched transaction results
+- Missing internal transaction detection
+- Missing external transaction detection
+- Amount mismatch detection
+- Currency mismatch detection
+- Duplicate external record detection
+- Persisted reconciliation runs and results
+- Idempotent reconciliation requests through `Idempotency-Key`
+- Explicit discrepancy explanations
+- Automated coverage for matched and mismatched scenarios
 
-Current API surface remains:
+Current API surface includes:
 
 ```text
 POST /transactions
 GET  /transactions/{id}
+POST /transactions/{id}/transitions
+POST /transactions/{id}/retry
+GET  /transactions/{id}/recovery
+POST /reconciliation
+GET  /reconciliation/{id}
 GET  /health
 ```
 
-Example request:
+Example reconciliation request:
 
 ```http
-POST /transactions
-Idempotency-Key: order-10001
+POST /reconciliation
+Idempotency-Key: reconciliation-2026-09-17
 Content-Type: application/json
 
 {
-  "fromAccount": "customer-001",
-  "toAccount": "merchant-001",
-  "amount": 100.50,
-  "currency": "USD"
+  "records": [
+    {
+      "externalTransactionId": "settlement-10001",
+      "transactionId": "00000000-0000-0000-0000-000000000000",
+      "amount": 100.50,
+      "currency": "USD"
+    }
+  ]
 }
 ```
 
-A successful transaction creates two journal entries:
-
-```text
-customer-001   Debit   100.50 USD
-merchant-001   Credit  100.50 USD
-
-Net: 0.00 USD
-```
+A reconciliation run produces explicit results such as `Matched`, `MissingInternal`, `MissingExternal`, `AmountMismatch`, `CurrencyMismatch`, and `DuplicateExternal`.
 
 ## Running Locally
 
@@ -134,20 +136,31 @@ LedgerFlow/
 ├── src/
 │   └── LedgerFlow/
 │       ├── Application/
-│       │   └── TransactionService.cs
+│       │   ├── TransactionService.cs
+│       │   ├── RetryService.cs
+│       │   └── ReconciliationService.cs
 │       ├── Domain/
-│       │   └── DomainModels.cs
+│       │   ├── DomainModels.cs
+│       │   ├── RetryModels.cs
+│       │   └── ReconciliationModels.cs
 │       ├── Infrastructure/
 │       │   ├── LedgerFlowDbContext.cs
 │       │   └── TransactionRepository.cs
 │       ├── Migrations/
-│       │   └── 202609061830_InitialPersistentLedger.cs
+│       │   ├── 202609061830_InitialPersistentLedger.cs
+│       │   ├── 202609091000_AddTransactionStateTransitions.cs
+│       │   ├── 202609101000_AddEventOutbox.cs
+│       │   ├── 202609141000_AddRetryRecovery.cs
+│       │   └── 202609171000_AddReconciliation.cs
 │       ├── LedgerFlow.csproj
 │       ├── Program.cs
 │       └── appsettings.json
 ├── tests/
 │   └── LedgerFlow.Tests/
 │       ├── PersistentLedgerTests.cs
+│       ├── EventDrivenProcessingTests.cs
+│       ├── RetryRecoveryTests.cs
+│       ├── ReconciliationTests.cs
 │       ├── TransactionApiTests.cs
 │       ├── TransactionDomainTests.cs
 │       └── LedgerFlow.Tests.csproj
@@ -161,52 +174,21 @@ The implementation is intentionally decomposed into domain, application, infrast
 
 The following capabilities are planned as incremental work under the LedgerFlow epic.
 
-## Phase 2 — Domain & Persistent Ledger 🚧
+## Phase 6 — Reconciliation Engine ✅
 
-- Introduce explicit domain models and invariants
-- Replace in-memory storage with PostgreSQL
-- Add durable transaction and ledger storage
-- Add database transactions for atomic financial operations
-- Add database constraints and indexes
-- Make journal entries immutable after posting
+- [x] Introduce an external transaction/settlement input source
+- [x] Compare completed internal transaction records against external records
+- [x] Detect matched transactions
+- [x] Detect missing internal transactions
+- [x] Detect missing external transactions
+- [x] Detect amount mismatches
+- [x] Detect currency mismatches
+- [x] Detect duplicate records
+- [x] Persist reconciliation runs and results
+- [x] Make reconciliation requests idempotent
+- [x] Produce reconciliation results and discrepancy explanations
 
-## Phase 3 — Transaction State Machine ⬜
-
-- Formalize valid state transitions
-- Support `Pending → Processing → Completed / Failed`
-- Reject invalid transitions
-- Record transition timestamps
-- Capture failure reasons
-
-## Phase 4 — Event-Driven Processing & Outbox ⬜
-
-- Introduce asynchronous transaction processing
-- Add a message broker
-- Publish transaction lifecycle events
-- Implement idempotent consumers
-- Add transactional outbox processing
-- Model at-least-once delivery semantics
-
-## Phase 5 — Retry / Dead Letter / Failure Recovery ⬜
-
-- Add transient failure handling
-- Implement bounded retries with backoff
-- Track retry attempts
-- Capture failure reasons
-- Introduce dead-letter handling
-- Demonstrate recovery from transient failures
-
-## Phase 6 — Reconciliation Engine ⬜
-
-- Introduce an external transaction/settlement input source
-- Compare internal ledger records against external records
-- Detect matched transactions
-- Detect missing internal transactions
-- Detect missing external transactions
-- Detect amount mismatches
-- Detect currency mismatches
-- Detect duplicate records
-- Produce reconciliation results and discrepancy explanations
+Implemented by Issue #19.
 
 ## Phase 7 — Settlement Simulation ⬜
 
@@ -314,16 +296,16 @@ Current coverage includes:
 - Invalid amount validation
 - Domain-level financial invariants
 - Persistence of transactions and journal entries
+- Reconciliation matching and discrepancy detection
+- Reconciliation idempotency
 
 Future coverage will include:
 
 - Concurrent idempotency against PostgreSQL
-- State-machine transitions
 - Duplicate events
 - Out-of-order events
 - Retry behavior
 - Dead-letter behavior
-- Reconciliation discrepancies
 - Settlement idempotency
 - End-to-end recovery scenarios
 

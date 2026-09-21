@@ -26,6 +26,11 @@ builder.Services.AddScoped<ReconciliationService>();
 builder.Services.AddScoped<OutboxPublisher>();
 builder.Services.AddScoped<IEventConsumer, TransactionEventConsumer>();
 builder.Services.AddSingleton<IEventBroker, InMemoryEventBroker>();
+builder.Services.AddSingleton(new FraudRuleOptions(
+    ReadDecimal("FRAUD_THRESHOLD", 10000m),
+    ReadInt("FRAUD_VELOCITY_LIMIT", 5),
+    ReadSet("FRAUD_RESTRICTED_ACCOUNTS")));
+builder.Services.AddSingleton<FraudRuleService>();
 
 if (!isTesting)
 {
@@ -110,8 +115,34 @@ app.MapGet("/reconciliation/{id:guid}", async (Guid id, ReconciliationService se
     return run is null ? Results.NotFound() : Results.Ok(run);
 });
 
+app.MapPost("/fraud/evaluate", (FraudEvaluationRequest request, FraudRuleService service) =>
+{
+    try
+    {
+        return Results.Ok(service.Evaluate(request));
+    }
+    catch (DomainValidationException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+});
+
+app.MapGet("/fraud/decisions/{transactionId:guid}", (Guid transactionId, FraudRuleService service) =>
+    Results.Ok(service.GetDecisions(transactionId)));
+
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.Run();
+
+static decimal ReadDecimal(string name, decimal fallback) =>
+    decimal.TryParse(Environment.GetEnvironmentVariable(name), out var value) && value > 0 ? value : fallback;
+
+static int ReadInt(string name, int fallback) =>
+    int.TryParse(Environment.GetEnvironmentVariable(name), out var value) && value > 0 ? value : fallback;
+
+static IReadOnlySet<string> ReadSet(string name) =>
+    (Environment.GetEnvironmentVariable(name) ?? string.Empty)
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
 public partial class Program;
 

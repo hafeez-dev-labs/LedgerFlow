@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace LedgerFlow.Application;
 
-public sealed class ReconciliationService(LedgerFlowDbContext db)
+public sealed class ReconciliationService(LedgerFlowDbContext db, IAuditTrailWriter? auditTrail = null)
 {
     public async Task<ReconciliationRun> ReconcileAsync(
         IReadOnlyCollection<ExternalSettlementRecord> externalRecords,
@@ -88,6 +88,8 @@ public sealed class ReconciliationService(LedgerFlowDbContext db)
         run.Complete(DateTimeOffset.UtcNow);
         db.ReconciliationRuns.Add(run);
         await db.SaveChangesAsync(cancellationToken);
+        var statusCounts = run.Results.GroupBy(result => result.Status).ToDictionary(group => group.Key.ToString(), group => group.Count());
+        auditTrail?.Record("reconciliation.completed", "reconciliation", run.Id, null, normalizedKey, new { resultCount = run.Results.Count, statusCounts });
         return run;
     }
 

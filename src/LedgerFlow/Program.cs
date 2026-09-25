@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 var builder = WebApplication.CreateBuilder(args);
 var isTesting = builder.Environment.IsEnvironment("Testing");
 
-builder.Services.AddDbContext<LedgerFlowDbContext>(options =>
+builder.Services.AddDbContextFactory<LedgerFlowDbContext>(options =>
 {
     if (isTesting)
     {
@@ -24,6 +24,8 @@ builder.Services.AddScoped<TransactionService>();
 builder.Services.AddScoped<RetryService>();
 builder.Services.AddScoped<ReconciliationService>();
 builder.Services.AddScoped<OutboxPublisher>();
+builder.Services.AddSingleton<IAuditTrailWriter, AuditTrailWriter>();
+builder.Services.AddSingleton<SettlementService>();
 builder.Services.AddScoped<IEventConsumer, TransactionEventConsumer>();
 builder.Services.AddSingleton<IEventBroker, InMemoryEventBroker>();
 builder.Services.AddSingleton(new FraudRuleOptions(
@@ -96,6 +98,9 @@ app.MapGet("/transactions/{id:guid}", async (Guid id, TransactionService service
     var transaction = await service.GetAsync(id, cancellationToken);
     return transaction is null ? Results.NotFound() : Results.Ok(transaction);
 });
+
+app.MapGet("/audit/transactions/{transactionId:guid}", (Guid transactionId, IAuditTrailWriter auditTrail) =>
+    Results.Ok(auditTrail.GetByTransaction(transactionId)));
 
 app.MapPost("/reconciliation", async (ReconciliationRequest request, HttpRequest httpRequest, ReconciliationService service, CancellationToken cancellationToken) =>
 {

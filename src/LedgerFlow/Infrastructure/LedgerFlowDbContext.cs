@@ -15,6 +15,7 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
     public DbSet<DeadLetterRecord> DeadLetterRecords => Set<DeadLetterRecord>();
     public DbSet<ReconciliationRun> ReconciliationRuns => Set<ReconciliationRun>();
     public DbSet<ReconciliationResult> ReconciliationResults => Set<ReconciliationResult>();
+    public DbSet<AuditRecord> AuditRecords => Set<AuditRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -132,6 +133,21 @@ public sealed class LedgerFlowDbContext(DbContextOptions<LedgerFlowDbContext> op
             entity.Property(run => run.CompletedAt);
             entity.HasIndex(run => run.IdempotencyKey).IsUnique();
             entity.HasMany(run => run.Results).WithOne().HasForeignKey(result => result.ReconciliationRunId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AuditRecord>(entity =>
+        {
+            entity.ToTable("audit_records");
+            entity.HasKey(record => record.Id);
+            entity.Property(record => record.EventType).HasMaxLength(100).IsRequired();
+            entity.Property(record => record.AggregateType).HasMaxLength(100).IsRequired();
+            entity.Property(record => record.AggregateId).IsRequired();
+            entity.Property(record => record.TransactionId);
+            entity.Property(record => record.CorrelationId).HasMaxLength(200);
+            entity.Property(record => record.OccurredAt).IsRequired();
+            entity.Property(record => record.Payload).HasColumnType("jsonb").IsRequired();
+            entity.HasIndex(record => new { record.TransactionId, record.OccurredAt });
+            entity.HasIndex(record => new { record.AggregateType, record.AggregateId, record.OccurredAt });
         });
 
         modelBuilder.Entity<ReconciliationResult>(entity =>

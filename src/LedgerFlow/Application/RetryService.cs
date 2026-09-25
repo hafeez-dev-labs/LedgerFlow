@@ -12,7 +12,7 @@ public sealed record RecoveryStatus(
     string? LastFailureReason,
     DateTimeOffset? ResolvedAt);
 
-public sealed class RetryService(LedgerFlowDbContext db)
+public sealed class RetryService(LedgerFlowDbContext db, IAuditTrailWriter? auditTrail = null)
 {
     private const int MaxAttempts = 3;
 
@@ -40,6 +40,7 @@ public sealed class RetryService(LedgerFlowDbContext db)
         }
 
         await db.SaveChangesAsync(cancellationToken);
+        auditTrail?.Record("retry.recorded", "transaction", transaction.Id, transaction.Id, transaction.Id.ToString(), new { attempt = nextAttemptNumber, nextAttemptAt, reason = normalizedReason, deadLetter = !nextAttemptAt.HasValue });
     }
 
     public async Task MarkRecoveredAsync(Guid transactionId, CancellationToken cancellationToken)
@@ -51,6 +52,7 @@ public sealed class RetryService(LedgerFlowDbContext db)
         var deadLetter = await db.DeadLetterRecords.SingleOrDefaultAsync(item => item.TransactionId == transactionId && item.ResolvedAt == null, cancellationToken);
         deadLetter?.MarkResolved(DateTimeOffset.UtcNow);
         await db.SaveChangesAsync(cancellationToken);
+        auditTrail?.Record("retry.recovered", "transaction", transactionId, transactionId, transactionId.ToString(), new { mode = "mark-recovered" });
     }
 
     public async Task<Transaction> RetryNowAsync(Guid transactionId, CancellationToken cancellationToken)
@@ -72,6 +74,7 @@ public sealed class RetryService(LedgerFlowDbContext db)
         transaction.TransitionTo(TransactionStatus.Processing);
         schedule.MarkRecovered(DateTimeOffset.UtcNow);
         await db.SaveChangesAsync(cancellationToken);
+        auditTrail?.Record("retry.recovered", "transaction", transactionId, transactionId, transactionId.ToString(), new { mode = "retry-now" });
         return transaction;
     }
 
@@ -99,7 +102,10 @@ public sealed class RetryService(LedgerFlowDbContext db)
             processed++;
         }
 
-        if (processed > 0) await db.SaveChangesAsync(cancellationToken);
+        if (processed > 0)
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
         return processed;
     }
 

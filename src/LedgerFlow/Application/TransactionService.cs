@@ -17,7 +17,8 @@ public sealed record CreateTransactionResult(Transaction Transaction, bool Alrea
 
 public sealed class TransactionService(
     LedgerFlowDbContext db,
-    ITransactionRepository transactions)
+    ITransactionRepository transactions,
+    IAuditTrailWriter? auditTrail = null)
 {
     public async Task<CreateTransactionResult> CreateAsync(CreateTransactionCommand command, CancellationToken cancellationToken)
     {
@@ -64,6 +65,21 @@ public sealed class TransactionService(
                 {
                     await databaseTransaction.CommitAsync(cancellationToken);
                 }
+
+                auditTrail?.Record(
+                    "transaction.created",
+                    "transaction",
+                    transaction.Id,
+                    transaction.Id,
+                    normalizedKey,
+                    new { transaction.Amount, transaction.Currency, transaction.FromAccountId, transaction.ToAccountId });
+                auditTrail?.Record(
+                    "ledger.posted",
+                    "ledger",
+                    transaction.Id,
+                    transaction.Id,
+                    normalizedKey,
+                    new { entries = transaction.LedgerEntries.Select(entry => new { entry.AccountId, entry.Type, entry.Amount, entry.Currency }).ToArray() });
 
                 return new CreateTransactionResult(transaction, false);
             }
@@ -118,6 +134,15 @@ public sealed class TransactionService(
             {
                 await databaseTransaction.CommitAsync(cancellationToken);
             }
+
+            var transition = transaction.StateTransitions[^1];
+            auditTrail?.Record(
+                "transaction.transitioned",
+                "transaction",
+                transaction.Id,
+                transaction.Id,
+                transaction.Id.ToString(),
+                new { from = transition.FromStatus, to = transition.ToStatus, transition.FailureReason, transition.TransitionedAt });
 
             return transaction;
         }

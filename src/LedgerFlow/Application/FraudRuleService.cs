@@ -7,10 +7,12 @@ public sealed class FraudRuleService
 {
     private readonly FraudRuleOptions options;
     private readonly ConcurrentQueue<FraudDecision> decisions = new();
+    private readonly IAuditTrailWriter? auditTrail;
 
-    public FraudRuleService(FraudRuleOptions options)
+    public FraudRuleService(FraudRuleOptions options, IAuditTrailWriter? auditTrail = null)
     {
         this.options = options;
+        this.auditTrail = auditTrail;
         if (options.TransactionThreshold <= 0) throw new ArgumentOutOfRangeException(nameof(options));
         if (options.VelocityLimit <= 0) throw new ArgumentOutOfRangeException(nameof(options));
     }
@@ -41,6 +43,13 @@ public sealed class FraudRuleService
             DateTimeOffset.UtcNow);
 
         decisions.Enqueue(decision);
+        auditTrail?.Record(
+            "fraud.decision",
+            "fraud",
+            request.TransactionId,
+            request.TransactionId,
+            request.TransactionId.ToString(),
+            new { request.AccountId, request.Amount, request.RecentTransactionCount, decision.Status, decision.Reasons });
         return decision;
     }
 

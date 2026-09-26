@@ -18,6 +18,8 @@ public sealed class RetryService(LedgerFlowDbContext db, IAuditTrailWriter? audi
 
     public async Task RecordFailureAsync(Transaction transaction, string failureReason, CancellationToken cancellationToken)
     {
+        using var activity = LedgerFlowTelemetry.StartActivity("retry.record", transaction.Id);
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         var normalizedReason = failureReason.Trim();
         var schedule = await db.RetrySchedules.SingleOrDefaultAsync(item => item.TransactionId == transaction.Id, cancellationToken);
         if (schedule is null)
@@ -40,11 +42,16 @@ public sealed class RetryService(LedgerFlowDbContext db, IAuditTrailWriter? audi
         }
 
         await db.SaveChangesAsync(cancellationToken);
+        LedgerFlowTelemetry.Add(LedgerFlowTelemetry.Retries, "outcome", nextAttemptAt.HasValue ? "scheduled" : "dead_lettered");
+        if (!nextAttemptAt.HasValue)
+            LedgerFlowTelemetry.DeadLetters.Add(1);
+        LedgerFlowTelemetry.Record(LedgerFlowTelemetry.OperationDuration, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, "operation", "retry.record");
         auditTrail?.Record("retry.recorded", "transaction", transaction.Id, transaction.Id, transaction.Id.ToString(), new { attempt = nextAttemptNumber, nextAttemptAt, reason = normalizedReason, deadLetter = !nextAttemptAt.HasValue });
     }
 
     public async Task MarkRecoveredAsync(Guid transactionId, CancellationToken cancellationToken)
     {
+        using var activity = LedgerFlowTelemetry.StartActivity("retry.mark_recovered", transactionId);
         var schedule = await db.RetrySchedules.SingleOrDefaultAsync(item => item.TransactionId == transactionId, cancellationToken);
         if (schedule is null || schedule.Status == RetryStatus.Recovered) return;
 
@@ -52,11 +59,13 @@ public sealed class RetryService(LedgerFlowDbContext db, IAuditTrailWriter? audi
         var deadLetter = await db.DeadLetterRecords.SingleOrDefaultAsync(item => item.TransactionId == transactionId && item.ResolvedAt == null, cancellationToken);
         deadLetter?.MarkResolved(DateTimeOffset.UtcNow);
         await db.SaveChangesAsync(cancellationToken);
+        LedgerFlowTelemetry.Add(LedgerFlowTelemetry.Retries, "outcome", "recovered");
         auditTrail?.Record("retry.recovered", "transaction", transactionId, transactionId, transactionId.ToString(), new { mode = "mark-recovered" });
     }
 
     public async Task<Transaction> RetryNowAsync(Guid transactionId, CancellationToken cancellationToken)
     {
+        using var activity = LedgerFlowTelemetry.StartActivity("retry.now", transactionId);
         var transaction = await db.Transactions
             .Include(item => item.LedgerEntries)
             .Include(item => item.StateTransitions)
@@ -74,7 +83,8 @@ public sealed class RetryService(LedgerFlowDbContext db, IAuditTrailWriter? audi
         transaction.TransitionTo(TransactionStatus.Processing);
         schedule.MarkRecovered(DateTimeOffset.UtcNow);
         await db.SaveChangesAsync(cancellationToken);
-        auditTrail?.Record("retry.recovered", "transaction", transactionId, transactionId, transactionId.ToString(), new { mode = "retry-now" });
+        LedgerFlowTelemetry.Add(LedgerFlowTelemetry.Retries, "outcome", "retry-now");
+        auditTrail?.Record("retry.recovered", "transaction", transactionId, transactionId, LedgerFlowTelemetry.CurrentCorrelationId ?? transactionId.ToString(), new { mode = "retry-now" });
         return transaction;
     }
 
@@ -105,6 +115,7 @@ public sealed class RetryService(LedgerFlowDbContext db, IAuditTrailWriter? audi
         if (processed > 0)
         {
             await db.SaveChangesAsync(cancellationToken);
+            LedgerFlowTelemetry.Retries.Add(processed, new KeyValuePair<string, object?>("outcome", "scheduled"));
         }
         return processed;
     }

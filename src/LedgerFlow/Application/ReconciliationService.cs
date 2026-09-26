@@ -11,6 +11,8 @@ public sealed class ReconciliationService(LedgerFlowDbContext db, IAuditTrailWri
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
+        using var activity = LedgerFlowTelemetry.StartActivity("reconciliation.run");
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         if (string.IsNullOrWhiteSpace(idempotencyKey))
             throw new DomainValidationException("Reconciliation idempotency key is required.");
 
@@ -88,6 +90,16 @@ public sealed class ReconciliationService(LedgerFlowDbContext db, IAuditTrailWri
         run.Complete(DateTimeOffset.UtcNow);
         db.ReconciliationRuns.Add(run);
         await db.SaveChangesAsync(cancellationToken);
+        foreach (var result in run.Results.Where(result => result.Status != ReconciliationResultStatus.Matched))
+            LedgerFlowTelemetry.Add(LedgerFlowTelemetry.ReconciliationResults, "status", result.Status.ToString());
+        LedgerFlowTelemetry.ReconciliationResults.Add(
+            run.Results.Count(result => result.Status == ReconciliationResultStatus.Matched),
+            new KeyValuePair<string, object?>("status", ReconciliationResultStatus.Matched.ToString()));
+        LedgerFlowTelemetry.Record(
+            LedgerFlowTelemetry.OperationDuration,
+            System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+            "operation",
+            "reconciliation.run");
         var statusCounts = run.Results.GroupBy(result => result.Status).ToDictionary(group => group.Key.ToString(), group => group.Count());
         auditTrail?.Record("reconciliation.completed", "reconciliation", run.Id, null, normalizedKey, new { resultCount = run.Results.Count, statusCounts });
         return run;

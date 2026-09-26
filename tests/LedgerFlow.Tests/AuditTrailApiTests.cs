@@ -31,6 +31,8 @@ public sealed class AuditTrailApiTests : IClassFixture<TestingWebApplicationFact
         createRequest.Headers.Add("Idempotency-Key", key);
 
         var createResponse = await client.SendAsync(createRequest);
+        Assert.True(createResponse.Headers.TryGetValues("X-Correlation-Id", out var correlationValues));
+        Assert.False(string.IsNullOrWhiteSpace(correlationValues!.Single()));
         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
         var created = await createResponse.Content.ReadFromJsonAsync<TransactionResponse>();
         Assert.NotNull(created);
@@ -78,6 +80,16 @@ public sealed class AuditTrailApiTests : IClassFixture<TestingWebApplicationFact
     }
 
     private sealed record TransactionResponse(Guid Id, TransactionStatus Status);
+    [Fact]
+    public async Task HealthRequestReturnsCorrelationId()
+    {
+        var response = await client.GetAsync("/health");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("X-Correlation-Id", out var values));
+        Assert.False(string.IsNullOrWhiteSpace(values!.Single()));
+    }
+
     private sealed record AuditRecordResponse(
         Guid Id,
         string EventType,

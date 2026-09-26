@@ -22,6 +22,8 @@ public sealed class TransactionService(
 {
     public async Task<CreateTransactionResult> CreateAsync(CreateTransactionCommand command, CancellationToken cancellationToken)
     {
+        using var activity = LedgerFlowTelemetry.StartActivity("transaction.create");
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         ValidateRequest(command);
 
         IDbContextTransaction? databaseTransaction = null;
@@ -41,6 +43,8 @@ public sealed class TransactionService(
                     await databaseTransaction.CommitAsync(cancellationToken);
                 }
 
+                LedgerFlowTelemetry.Add(LedgerFlowTelemetry.Transactions, "outcome", "idempotent");
+                LedgerFlowTelemetry.Record(LedgerFlowTelemetry.ProcessingDuration, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, "operation", "transaction.create");
                 return new CreateTransactionResult(existing, true);
             }
 
@@ -65,6 +69,10 @@ public sealed class TransactionService(
                 {
                     await databaseTransaction.CommitAsync(cancellationToken);
                 }
+
+                LedgerFlowTelemetry.Add(LedgerFlowTelemetry.Transactions, "outcome", "created");
+                LedgerFlowTelemetry.Record(LedgerFlowTelemetry.ProcessingDuration, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, "operation", "transaction.create");
+                activity?.SetTag("ledgerflow.transaction_id", transaction.Id);
 
                 auditTrail?.Record(
                     "transaction.created",
@@ -115,6 +123,8 @@ public sealed class TransactionService(
         string? failureReason,
         CancellationToken cancellationToken)
     {
+        using var activity = LedgerFlowTelemetry.StartActivity("transaction.transition", id);
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         IDbContextTransaction? databaseTransaction = null;
         if (!db.Database.IsInMemory())
         {
@@ -136,6 +146,16 @@ public sealed class TransactionService(
             }
 
             var transition = transaction.StateTransitions[^1];
+            LedgerFlowTelemetry.Add(
+                LedgerFlowTelemetry.Transactions,
+                "outcome",
+                targetStatus == TransactionStatus.Completed ? "completed" : targetStatus == TransactionStatus.Failed ? "failed" : "transitioned");
+            LedgerFlowTelemetry.Record(
+                LedgerFlowTelemetry.ProcessingDuration,
+                System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                "operation",
+                "transaction.transition");
+
             auditTrail?.Record(
                 "transaction.transitioned",
                 "transaction",

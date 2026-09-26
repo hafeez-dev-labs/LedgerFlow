@@ -60,12 +60,13 @@ public sealed class AuditTrailWriter(IDbContextFactory<LedgerFlowDbContext> fact
         object details)
     {
         using var db = factory.CreateDbContext();
+        var effectiveCorrelationId = correlationId ?? LedgerFlowTelemetry.CurrentCorrelationId;
         db.AuditRecords.Add(new AuditRecord(
             eventType,
             aggregateType,
             aggregateId,
             transactionId,
-            correlationId,
+            effectiveCorrelationId,
             DateTimeOffset.UtcNow,
             JsonSerializer.Serialize(details)));
         db.SaveChanges();

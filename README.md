@@ -129,6 +129,12 @@ The test suite uses an isolated EF Core in-memory provider so API and domain tes
 
 The application exposes a health endpoint at `GET /health`.
 
+### Observability
+
+OpenTelemetry is registered for ASP.NET Core traces and metrics, with custom LedgerFlow business instruments for transaction outcomes, processing duration, retries, dead letters, reconciliation results, settlements, and fraud decisions. Structured request logs include the correlation identifier.
+
+No telemetry backend is required for local startup. To export telemetry to an OTLP-compatible collector, set `OTEL_EXPORTER_OTLP_ENDPOINT` before starting the application.
+
 ## Project Structure
 
 ```text
@@ -220,19 +226,15 @@ This phase is a simulation only and is not intended to represent production frau
 - Record settlement actions
 - Make audit records append-oriented and traceable
 
-## Phase 10 — Observability ⬜
+## Phase 10 — Observability ✅
 
-- Add structured logging
-- Add OpenTelemetry tracing
-- Add application metrics
-- Measure transaction latency
-- Measure success/failure rates
-- Measure retry activity
-- Measure dead-letter depth
-- Measure reconciliation mismatch rates
-- Measure settlement success/failure
-- Measure processing throughput
-- Correlate activity using transaction and correlation identifiers
+- [x] Structured HTTP logging with correlation identifiers
+- [x] OpenTelemetry tracing for HTTP and key business operations
+- [x] OpenTelemetry metrics for transactions, processing duration, retries, dead letters, reconciliation results, settlements, and fraud decisions
+- [x] Request correlation IDs exposed through `X-Correlation-Id`
+- [x] Optional OTLP export through `OTEL_EXPORTER_OTLP_ENDPOINT`
+- [x] Transaction, retry, reconciliation, settlement, and fraud operations correlate with trace context
+- [x] Observability configuration remains backend-neutral
 
 ## Phase 11 — API Hardening & Documentation ⬜
 

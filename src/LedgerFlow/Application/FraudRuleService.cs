@@ -19,6 +19,7 @@ public sealed class FraudRuleService
 
     public FraudDecision Evaluate(FraudEvaluationRequest request)
     {
+        using var activity = LedgerFlowTelemetry.StartActivity("fraud.evaluate", request.TransactionId);
         if (request.Amount <= 0) throw new DomainValidationException("Amount must be positive.");
         if (string.IsNullOrWhiteSpace(request.AccountId)) throw new DomainValidationException("AccountId is required.");
         if (request.RecentTransactionCount < 0) throw new DomainValidationException("RecentTransactionCount cannot be negative.");
@@ -43,6 +44,7 @@ public sealed class FraudRuleService
             DateTimeOffset.UtcNow);
 
         decisions.Enqueue(decision);
+        LedgerFlowTelemetry.Add(LedgerFlowTelemetry.FraudDecisions, "outcome", decision.Status.ToString());
         auditTrail?.Record(
             "fraud.decision",
             "fraud",

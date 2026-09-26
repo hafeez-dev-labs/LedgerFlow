@@ -1,10 +1,48 @@
+using System.Diagnostics;
 using LedgerFlow.Application;
 using LedgerFlow.Domain;
 using LedgerFlow.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 var isTesting = builder.Environment.IsEnvironment("Testing");
+var otlpEndpointValue = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+var hasOtlpEndpoint = Uri.TryCreate(otlpEndpointValue, UriKind.Absolute, out var otlpEndpoint);
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService(
+        serviceName: LedgerFlowTelemetry.ServiceName,
+        serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? "1.0.0"))
+    .WithTracing(tracing =>
+    {
+        tracing.AddSource(LedgerFlowTelemetry.ActivitySourceName)
+            .AddAspNetCoreInstrumentation(options => options.RecordException = true);
+
+        if (hasOtlpEndpoint)
+            tracing.AddOtlpExporter(options => options.Endpoint = otlpEndpoint!);
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics.AddMeter(LedgerFlowTelemetry.MeterName)
+            .AddAspNetCoreInstrumentation();
+
+        if (hasOtlpEndpoint)
+            metrics.AddOtlpExporter(options => options.Endpoint = otlpEndpoint!);
+    });
+
+builder.Logging.AddOpenTelemetry(logging =>
+{
+    logging.IncludeScopes = true;
+    logging.IncludeFormattedMessage = true;
+    logging.ParseStateValues = true;
+
+    if (hasOtlpEndpoint)
+        logging.AddOtlpExporter(options => options.Endpoint = otlpEndpoint!);
+});
 
 builder.Services.AddDbContextFactory<LedgerFlowDbContext>(options =>
 {
@@ -42,6 +80,39 @@ if (!isTesting)
 }
 
 var app = builder.Build();
+
+app.Use(async (context, next) =>
+{
+    var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("LedgerFlow.Request");
+    var correlationId = context.Request.Headers[LedgerFlowTelemetry.CorrelationHeader].FirstOrDefault()
+        ?? Activity.Current?.TraceId.ToString()
+        ?? Guid.NewGuid().ToString("N");
+
+    Activity.Current?.SetTag("correlation.id", correlationId);
+    context.Response.Headers[LedgerFlowTelemetry.CorrelationHeader] = correlationId;
+
+    var startedAt = Stopwatch.GetTimestamp();
+    using (logger.BeginScope(new Dictionary<string, object?>
+    {
+        ["CorrelationId"] = correlationId,
+        ["Method"] = context.Request.Method,
+        ["Path"] = context.Request.Path.ToString()
+    }))
+    {
+        try
+        {
+            await next();
+        }
+        finally
+        {
+            var elapsed = Stopwatch.GetElapsedTime(startedAt);
+            logger.LogInformation(
+                "HTTP request completed with status {StatusCode} in {DurationMs} ms.",
+                context.Response.StatusCode,
+                elapsed.TotalMilliseconds);
+        }
+    }
+});
 
 if (!isTesting)
 {

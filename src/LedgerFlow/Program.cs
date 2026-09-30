@@ -9,6 +9,7 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddProblemDetails();
 var isTesting = builder.Environment.IsEnvironment("Testing");
 var otlpEndpointValue = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
 var hasOtlpEndpoint = Uri.TryCreate(otlpEndpointValue, UriKind.Absolute, out var otlpEndpoint);
@@ -80,6 +81,7 @@ if (!isTesting)
 }
 
 var app = builder.Build();
+app.UseExceptionHandler();
 
 app.Use(async (context, next) =>
 {
@@ -124,13 +126,13 @@ if (!isTesting)
 app.MapPost("/transactions", async (CreateTransactionRequest request, HttpRequest httpRequest, TransactionService service, CancellationToken cancellationToken) =>
 {
     var idempotencyKey = httpRequest.Headers["Idempotency-Key"].FirstOrDefault();
-    if (string.IsNullOrWhiteSpace(idempotencyKey)) return Results.BadRequest(new { error = "Idempotency-Key header is required." });
+    if (string.IsNullOrWhiteSpace(idempotencyKey)) return Results.BadRequest(new ApiError("Idempotency-Key header is required."));
     try
     {
         var result = await service.CreateAsync(new CreateTransactionCommand(request.FromAccount, request.ToAccount, request.Amount, request.Currency, idempotencyKey), cancellationToken);
         return result.AlreadyExisted ? Results.Ok(result.Transaction) : Results.Created($"/transactions/{result.Transaction.Id}", result.Transaction);
     }
-    catch (DomainValidationException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (DomainValidationException exception) { return Results.BadRequest(new ApiError(exception.Message)); }
 });
 
 app.MapPost("/transactions/{id:guid}/transitions", async (Guid id, TransitionTransactionRequest request, TransactionService service, RetryService retryService, LedgerFlowDbContext db, CancellationToken cancellationToken) =>
@@ -206,6 +208,33 @@ app.MapPost("/fraud/evaluate", (FraudEvaluationRequest request, FraudRuleService
 app.MapGet("/fraud/decisions/{transactionId:guid}", (Guid transactionId, FraudRuleService service) =>
     Results.Ok(service.GetDecisions(transactionId)));
 
+app.MapPost("/settlements", (SettlementCreateRequest request, HttpRequest httpRequest, SettlementService service) =>
+{
+    var idempotencyKey = httpRequest.Headers["Idempotency-Key"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(idempotencyKey)) return Results.BadRequest(new ApiError("Idempotency-Key header is required."));
+    try
+    {
+        var batch = service.CreateBatch(request.Items, idempotencyKey);
+        return Results.Created($"/settlements/{batch.Id}", batch);
+    }
+    catch (DomainValidationException exception) { return Results.BadRequest(new ApiError(exception.Message)); }
+});
+
+app.MapGet("/settlements/{id:guid}", (Guid id, SettlementService service) =>
+{
+    var batch = service.Get(id);
+    return batch is null ? Results.NotFound() : Results.Ok(batch);
+});
+
+app.MapPost("/settlements/{id:guid}/process", (Guid id, SettlementProcessRequest request, SettlementService service) =>
+{
+    try
+    {
+        return Results.Ok(service.Process(id, request.Fail, request.FailureReason));
+    }
+    catch (DomainValidationException exception) { return Results.BadRequest(new ApiError(exception.Message)); }
+});
+
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.Run();
 
@@ -225,3 +254,6 @@ public partial class Program;
 public sealed record CreateTransactionRequest(string FromAccount, string ToAccount, decimal Amount, string Currency = "USD");
 public sealed record TransitionTransactionRequest(TransactionStatus Status, string? FailureReason = null);
 public sealed record ReconciliationRequest(IReadOnlyList<ExternalSettlementRecord> Records);
+public sealed record SettlementCreateRequest(IReadOnlyCollection<SettlementItem> Items);
+public sealed record SettlementProcessRequest(bool Fail = false, string? FailureReason = null);
+public sealed record ApiError(string Error);

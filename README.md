@@ -69,7 +69,7 @@ Current reconciliation capabilities include:
 - Explicit discrepancy explanations
 - Automated coverage for matched and mismatched scenarios
 
-Current API surface includes:
+Current API surface includes transaction, reconciliation, settlement, fraud, audit, and health endpoints. The complete contract is maintained in `docs/openapi.yaml`.
 
 ```text
 POST /transactions
@@ -77,8 +77,14 @@ GET  /transactions/{id}
 POST /transactions/{id}/transitions
 POST /transactions/{id}/retry
 GET  /transactions/{id}/recovery
+GET  /audit/transactions/{transactionId}
 POST /reconciliation
 GET  /reconciliation/{id}
+POST /settlements
+GET  /settlements/{id}
+POST /settlements/{id}/process
+POST /fraud/evaluate
+GET  /fraud/decisions/{transactionId}
 GET  /health
 ```
 
@@ -236,14 +242,14 @@ This phase is a simulation only and is not intended to represent production frau
 - [x] Transaction, retry, reconciliation, settlement, and fraud operations correlate with trace context
 - [x] Observability configuration remains backend-neutral
 
-## Phase 11 — API Hardening & Documentation ⬜
+## Phase 11 — API Hardening & Documentation ✅
 
-- Expand transaction, ledger, reconciliation, and settlement APIs
-- Introduce consistent error responses
-- Improve OpenAPI documentation
-- Add realistic API examples
-- Add pagination/filtering where appropriate
-- Improve local development and configuration experience
+- [x] Expand transaction, reconciliation, and settlement APIs
+- [x] Introduce consistent validation error responses
+- [x] Add an OpenAPI contract at `docs/openapi.yaml`
+- [x] Add settlement request/response examples to the API contract
+- [x] Add explicit settlement create, get, and process endpoints
+- [x] Keep local API execution and configuration unchanged
 
 ## Phase 12 — Failure Lab & End-to-End Demonstrations ⬜
 

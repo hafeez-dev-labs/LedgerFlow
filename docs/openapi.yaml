@@ -1,0 +1,222 @@
+openapi: 3.0.3
+info:
+  title: LedgerFlow API
+  version: 1.0.0
+  description: Financial transaction processing and reconciliation simulation API.
+servers:
+  - url: http://localhost:5000
+paths:
+  /transactions:
+    post:
+      summary: Create an idempotent transaction
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransactionRequest'
+      responses:
+        '201': {description: Transaction created}
+        '200': {description: Existing transaction returned for an idempotent request}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /transactions/{id}:
+    get:
+      summary: Get a transaction
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200': {description: Transaction}
+        '404': {description: Transaction not found}
+  /transactions/{id}/transitions:
+    post:
+      summary: Transition transaction state
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionTransactionRequest'
+      responses:
+        '200': {description: Updated transaction}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /transactions/{id}/retry:
+    post:
+      summary: Retry a failed transaction
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200': {description: Retried transaction}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /transactions/{id}/recovery:
+    get:
+      summary: Get retry/recovery status
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200': {description: Recovery status}
+        '404': {description: Recovery status not found}
+  /audit/transactions/{transactionId}:
+    get:
+      summary: Get audit records for a transaction
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200': {description: Audit records}
+  /reconciliation:
+    post:
+      summary: Run idempotent reconciliation
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconciliationRequest'
+      responses:
+        '200': {description: Reconciliation run}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /reconciliation/{id}:
+    get:
+      summary: Get reconciliation results
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200': {description: Reconciliation run}
+        '404': {description: Run not found}
+  /settlements:
+    post:
+      summary: Create an idempotent settlement batch
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementCreateRequest'
+      responses:
+        '201': {description: Settlement batch}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /settlements/{id}:
+    get:
+      summary: Get a settlement batch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200': {description: Settlement batch}
+        '404': {description: Batch not found}
+  /settlements/{id}/process:
+    post:
+      summary: Process a settlement batch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementProcessRequest'
+      responses:
+        '200': {description: Processed settlement batch}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /fraud/evaluate:
+    post:
+      summary: Evaluate configured fraud simulation rules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '200': {description: Rule decision}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /fraud/decisions/{transactionId}:
+    get:
+      summary: Get fraud decisions for a transaction
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200': {description: Fraud decisions}
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200': {description: Healthy}
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+    TransactionId:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  responses:
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+    CreateTransactionRequest:
+      type: object
+      required: [fromAccount, toAccount, amount, currency]
+      properties:
+        fromAccount: {type: string}
+        toAccount: {type: string}
+        amount: {type: number, format: decimal}
+        currency: {type: string, minLength: 3, maxLength: 3}
+    TransitionTransactionRequest:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [Pending, Processing, Completed, Failed]}
+        failureReason: {type: string, nullable: true}
+    ReconciliationRequest:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: array
+          items: {type: object}
+    SettlementCreateRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [transactionId, amount, currency]
+            properties:
+              transactionId: {type: string, format: uuid}
+              amount: {type: number, format: decimal}
+              currency: {type: string, minLength: 3, maxLength: 3}
+    SettlementProcessRequest:
+      type: object
+      properties:
+        fail: {type: boolean}
+        failureReason: {type: string, nullable: true}

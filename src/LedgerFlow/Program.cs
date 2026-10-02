@@ -230,7 +230,7 @@ app.MapPost("/settlements/{id:guid}/process", (Guid id, SettlementProcessRequest
 {
     try
     {
-        return Results.Ok(service.Process(id, request.Fail, request.FailureReason));
+        return Results.Ok(service.Process(id, request.Fail, request.FailureReason, request.FailAfter));
     }
     catch (DomainValidationException exception) { return Results.BadRequest(new ApiError(exception.Message)); }
 });
@@ -255,5 +255,5 @@ public sealed record CreateTransactionRequest(string FromAccount, string ToAccou
 public sealed record TransitionTransactionRequest(TransactionStatus Status, string? FailureReason = null);
 public sealed record ReconciliationRequest(IReadOnlyList<ExternalSettlementRecord> Records);
 public sealed record SettlementCreateRequest(IReadOnlyCollection<SettlementItem> Items);
-public sealed record SettlementProcessRequest(bool Fail = false, string? FailureReason = null);
+public sealed record SettlementProcessRequest(bool Fail = false, string? FailureReason = null, int? FailAfter = null);
 public sealed record ApiError(string Error);

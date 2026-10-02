@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using LedgerFlow.Domain;
 using LedgerFlow.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -20,11 +21,17 @@ public sealed class TransactionService(
     ITransactionRepository transactions,
     IAuditTrailWriter? auditTrail = null)
 {
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> IdempotencyLocks = new(StringComparer.Ordinal);
+
     public async Task<CreateTransactionResult> CreateAsync(CreateTransactionCommand command, CancellationToken cancellationToken)
     {
         using var activity = LedgerFlowTelemetry.StartActivity("transaction.create");
         var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         ValidateRequest(command);
+
+        var normalizedKey = command.IdempotencyKey.Trim();
+        var idempotencyLock = IdempotencyLocks.GetOrAdd(normalizedKey, _ => new SemaphoreSlim(1, 1));
+        await idempotencyLock.WaitAsync(cancellationToken);
 
         IDbContextTransaction? databaseTransaction = null;
         if (!db.Database.IsInMemory())
@@ -34,7 +41,6 @@ public sealed class TransactionService(
 
         try
         {
-            var normalizedKey = command.IdempotencyKey.Trim();
             var existing = await transactions.GetByIdempotencyKeyAsync(normalizedKey, cancellationToken);
             if (existing is not null)
             {
@@ -111,6 +117,10 @@ public sealed class TransactionService(
             {
                 await databaseTransaction.DisposeAsync();
             }
+
+            idempotencyLock.Release();
+            if (idempotencyLock.CurrentCount == 1)
+                IdempotencyLocks.TryRemove(normalizedKey, out _);
         }
     }
 

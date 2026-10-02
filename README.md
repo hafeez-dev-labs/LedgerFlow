@@ -251,7 +251,7 @@ This phase is a simulation only and is not intended to represent production frau
 - [x] Add explicit settlement create, get, and process endpoints
 - [x] Keep local API execution and configuration unchanged
 
-## Phase 12 — Failure Lab & End-to-End Demonstrations ⬜
+## Phase 12 — Failure Lab & End-to-End Demonstrations ✅
 
 Create reproducible scenarios demonstrating the system's reliability characteristics:
 
@@ -266,6 +266,12 @@ Create reproducible scenarios demonstrating the system's reliability characteris
 - Ledger amount mismatch
 - Partial settlement failure
 - Successful recovery after transient infrastructure failure
+
+Implemented by Issue #14 / PR #14.
+
+The failure lab is covered by `tests/LedgerFlow.Tests/FailureLabTests.cs`. The scenarios use the existing transaction, outbox, retry, reconciliation, and settlement boundaries and assert observable invariants rather than relying on manual inspection. Concurrent duplicate requests are protected by a process-local idempotency gate plus the database unique constraint; the PostgreSQL path remains the correctness boundary across application instances.
+
+For local PostgreSQL demonstrations, run `docker compose up -d postgres`, start the API, and exercise the examples in the Phase 12 issue/PR. Partial settlement is exposed through `POST /settlements/{id}/process` with `failAfter` to leave settled, failed, and pending items observable in the response.
 
 # Financial Invariants
 
@@ -316,6 +322,7 @@ Future coverage will include:
 - Dead-letter behavior
 - Settlement idempotency
 - End-to-end recovery scenarios
+- Failure-lab duplicate, retry, dead-letter, missing-event, reconciliation, and settlement scenarios
 
 # Out of Scope
 

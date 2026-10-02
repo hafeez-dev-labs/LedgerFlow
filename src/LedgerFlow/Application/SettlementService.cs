@@ -33,7 +33,7 @@ public sealed class SettlementService(IAuditTrailWriter? auditTrail = null)
         }
     }
 
-    public SettlementBatch Process(Guid id, bool fail = false, string? failureReason = null)
+    public SettlementBatch Process(Guid id, bool fail = false, string? failureReason = null, int? failAfter = null)
     {
         using var activity = LedgerFlow.Infrastructure.LedgerFlowTelemetry.StartActivity("settlement.process", id);
 
@@ -47,7 +47,16 @@ public sealed class SettlementService(IAuditTrailWriter? auditTrail = null)
 
             batch.Start();
 
-            if (fail)
+            if (failAfter.HasValue)
+            {
+                batch.FailAfter(failAfter.Value, failureReason ?? "Simulated partial settlement failure.");
+                LedgerFlow.Infrastructure.LedgerFlowTelemetry.Add(
+                    LedgerFlow.Infrastructure.LedgerFlowTelemetry.Settlements,
+                    "outcome",
+                    "partially-failed");
+                auditTrail?.Record("settlement.partially_failed", "settlement", batch.Id, null, LedgerFlow.Infrastructure.LedgerFlowTelemetry.CurrentCorrelationId ?? batch.IdempotencyKey, new { batch.TotalAmount, settledItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Settled), failedItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Failed), pendingItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Pending), batch.FailureReason });
+            }
+            else if (fail)
             {
                 batch.Fail(failureReason ?? "Simulated settlement failure.");
                 LedgerFlow.Infrastructure.LedgerFlowTelemetry.Add(

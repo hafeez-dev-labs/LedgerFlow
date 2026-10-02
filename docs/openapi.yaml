@@ -220,3 +220,4 @@ components:
       properties:
         fail: {type: boolean}
         failureReason: {type: string, nullable: true}
+        failAfter: {type: integer, minimum: 0}

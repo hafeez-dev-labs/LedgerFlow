@@ -39,8 +39,7 @@ public sealed class SettlementService(IAuditTrailWriter? auditTrail = null)
 
         lock (Gate)
         {
-            var batch = Batches.Values.SingleOrDefault(value => value.Id == id)
-                ?? throw new DomainValidationException("Settlement batch was not found.");
+            var batch = FindBatch(id);
 
             if (batch.Status is SettlementBatchStatus.Settled or SettlementBatchStatus.Failed)
                 return batch;
@@ -54,7 +53,7 @@ public sealed class SettlementService(IAuditTrailWriter? auditTrail = null)
                     LedgerFlow.Infrastructure.LedgerFlowTelemetry.Settlements,
                     "outcome",
                     "partially-failed");
-                auditTrail?.Record("settlement.partially_failed", "settlement", batch.Id, null, LedgerFlow.Infrastructure.LedgerFlowTelemetry.CurrentCorrelationId ?? batch.IdempotencyKey, new { batch.TotalAmount, settledItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Settled), failedItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Failed), pendingItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Pending), batch.FailureReason });
+                auditTrail?.Record("settlement.partially_failed", "settlement", batch.Id, null, CorrelationId(batch), new { batch.TotalAmount, settledItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Settled), failedItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Failed), pendingItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Pending), batch.FailureReason });
             }
             else if (fail)
             {
@@ -63,7 +62,7 @@ public sealed class SettlementService(IAuditTrailWriter? auditTrail = null)
                     LedgerFlow.Infrastructure.LedgerFlowTelemetry.Settlements,
                     "outcome",
                     "failed");
-                auditTrail?.Record("settlement.failed", "settlement", batch.Id, null, LedgerFlow.Infrastructure.LedgerFlowTelemetry.CurrentCorrelationId ?? batch.IdempotencyKey, new { batch.TotalAmount, batch.FailureReason });
+                auditTrail?.Record("settlement.failed", "settlement", batch.Id, null, CorrelationId(batch), new { batch.TotalAmount, batch.FailureReason });
             }
             else
             {
@@ -72,9 +71,33 @@ public sealed class SettlementService(IAuditTrailWriter? auditTrail = null)
                     LedgerFlow.Infrastructure.LedgerFlowTelemetry.Settlements,
                     "outcome",
                     "settled");
-                auditTrail?.Record("settlement.settled", "settlement", batch.Id, null, LedgerFlow.Infrastructure.LedgerFlowTelemetry.CurrentCorrelationId ?? batch.IdempotencyKey, new { batch.TotalAmount, batch.CompletedAt });
+                auditTrail?.Record("settlement.settled", "settlement", batch.Id, null, CorrelationId(batch), new { batch.TotalAmount, batch.CompletedAt });
             }
 
+            return batch;
+        }
+    }
+
+    public SettlementBatch Retry(Guid id)
+    {
+        using var activity = LedgerFlow.Infrastructure.LedgerFlowTelemetry.StartActivity("settlement.retry", id);
+
+        lock (Gate)
+        {
+            var batch = FindBatch(id);
+            batch.StartRetry();
+            batch.SettleRemaining(DateTimeOffset.UtcNow);
+
+            LedgerFlow.Infrastructure.LedgerFlowTelemetry.Add(
+                LedgerFlow.Infrastructure.LedgerFlowTelemetry.Settlements,
+                "outcome",
+                "retried");
+            auditTrail?.Record("settlement.retried", "settlement", batch.Id, null, CorrelationId(batch), new
+            {
+                batch.TotalAmount,
+                settledItems = batch.Items.Count(item => item.Status == SettlementItemStatus.Settled),
+                batch.CompletedAt
+            });
             return batch;
         }
     }
@@ -84,4 +107,11 @@ public sealed class SettlementService(IAuditTrailWriter? auditTrail = null)
         lock (Gate)
             return Batches.Values.SingleOrDefault(value => value.Id == id);
     }
+
+    private static SettlementBatch FindBatch(Guid id) =>
+        Batches.Values.SingleOrDefault(value => value.Id == id)
+        ?? throw new DomainValidationException("Settlement batch was not found.");
+
+    private static string CorrelationId(SettlementBatch batch) =>
+        LedgerFlow.Infrastructure.LedgerFlowTelemetry.CurrentCorrelationId ?? batch.IdempotencyKey;
 }

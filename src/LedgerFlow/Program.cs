@@ -235,6 +235,15 @@ app.MapPost("/settlements/{id:guid}/process", (Guid id, SettlementProcessRequest
     catch (DomainValidationException exception) { return Results.BadRequest(new ApiError(exception.Message)); }
 });
 
+app.MapPost("/settlements/{id:guid}/retry", (Guid id, SettlementService service) =>
+{
+    try
+    {
+        return Results.Ok(service.Retry(id));
+    }
+    catch (DomainValidationException exception) { return Results.BadRequest(new ApiError(exception.Message)); }
+});
+
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.Run();
 

@@ -40,12 +40,34 @@ public sealed class SettlementBatch
         Status = SettlementBatchStatus.Processing;
     }
 
+    public void StartRetry()
+    {
+        if (Status != SettlementBatchStatus.Failed) throw new DomainValidationException("Only failed settlement batches can be retried.");
+        if (Items.All(item => item.Status == SettlementItemStatus.Settled))
+            throw new DomainValidationException("A fully settled batch cannot be retried.");
+        Status = SettlementBatchStatus.Processing;
+        FailureReason = null;
+        CompletedAt = null;
+    }
+
     public void Settle(DateTimeOffset at)
     {
         if (Status != SettlementBatchStatus.Processing) throw new DomainValidationException("Only processing batches can settle.");
         Items = Items.Select(item => item with { Status = SettlementItemStatus.Settled }).ToList();
         Status = SettlementBatchStatus.Settled;
         CompletedAt = at;
+        FailureReason = null;
+    }
+
+    public void SettleRemaining(DateTimeOffset at)
+    {
+        if (Status != SettlementBatchStatus.Processing) throw new DomainValidationException("Only processing batches can settle.");
+        Items = Items.Select(item => item.Status == SettlementItemStatus.Settled
+            ? item
+            : item with { Status = SettlementItemStatus.Settled }).ToList();
+        Status = SettlementBatchStatus.Settled;
+        CompletedAt = at;
+        FailureReason = null;
     }
 
     public void Fail(string reason)

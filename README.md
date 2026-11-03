@@ -371,3 +371,23 @@ Observability
 ```
 
 The project is intended to provide a practical platform for exploring backend architecture, distributed systems, financial-domain modeling, consistency, reliability, and API design.
+
+
+## PostgreSQL Idempotency Integration Test
+
+The multi-instance idempotency integration test uses a dedicated PostgreSQL database. It is skipped when `LEDGERFLOW_TEST_CONNECTION_STRING` is not set, and it refuses to run unless the configured database name ends with `_test`.
+
+Create a separate test database (do not point this setting at the normal local `ledgerflow` database):
+
+```sql
+CREATE DATABASE ledgerflow_test;
+```
+
+Set the connection string and run the focused test:
+
+```bash
+export LEDGERFLOW_TEST_CONNECTION_STRING="Host=localhost;Port=5432;Database=ledgerflow_test;Username=ledgerflow;Password=ledgerflow"
+dotnet test tests/LedgerFlow.Tests --filter FullyQualifiedName~PostgreSqlIdempotencyTests
+```
+
+The test creates and drops a uniquely named schema for each run. It uses two independent EF Core contexts against PostgreSQL, then verifies the transaction, balanced ledger entries, outbox event, committed retry, and rejection of a reused key with a different payload. The existing in-memory tests remain unchanged.

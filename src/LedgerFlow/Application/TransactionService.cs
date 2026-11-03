@@ -21,7 +21,7 @@ public sealed class TransactionService(
     ITransactionRepository transactions,
     IAuditTrailWriter? auditTrail = null)
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> IdempotencyLocks = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> InMemoryIdempotencyLocks = new(StringComparer.Ordinal);
 
     public async Task<CreateTransactionResult> CreateAsync(CreateTransactionCommand command, CancellationToken cancellationToken)
     {
@@ -30,31 +30,32 @@ public sealed class TransactionService(
         ValidateRequest(command);
 
         var normalizedKey = command.IdempotencyKey.Trim();
-        var idempotencyLock = IdempotencyLocks.GetOrAdd(normalizedKey, _ => new SemaphoreSlim(1, 1));
-        await idempotencyLock.WaitAsync(cancellationToken);
+        var normalizedCurrency = NormalizeCurrency(command.Currency);
+        SemaphoreSlim? inMemoryLock = null;
+        if (db.Database.IsInMemory())
+        {
+            inMemoryLock = InMemoryIdempotencyLocks.GetOrAdd(normalizedKey, _ => new SemaphoreSlim(1, 1));
+            await inMemoryLock.WaitAsync(cancellationToken);
+        }
 
         IDbContextTransaction? databaseTransaction = null;
         if (!db.Database.IsInMemory())
-        {
             databaseTransaction = await db.Database.BeginTransactionAsync(cancellationToken);
-        }
 
         try
         {
             var existing = await transactions.GetByIdempotencyKeyAsync(normalizedKey, cancellationToken);
             if (existing is not null)
             {
+                EnsureSameRequest(existing, command, normalizedCurrency);
                 if (databaseTransaction is not null)
-                {
                     await databaseTransaction.CommitAsync(cancellationToken);
-                }
 
                 LedgerFlowTelemetry.Add(LedgerFlowTelemetry.Transactions, "outcome", "idempotent");
                 LedgerFlowTelemetry.Record(LedgerFlowTelemetry.ProcessingDuration, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, "operation", "transaction.create");
                 return new CreateTransactionResult(existing, true);
             }
 
-            var normalizedCurrency = NormalizeCurrency(command.Currency);
             await EnsureAccountAsync(command.FromAccount, normalizedCurrency, cancellationToken);
             await EnsureAccountAsync(command.ToAccount, normalizedCurrency, cancellationToken);
 
@@ -72,9 +73,7 @@ public sealed class TransactionService(
             {
                 await db.SaveChangesAsync(cancellationToken);
                 if (databaseTransaction is not null)
-                {
                     await databaseTransaction.CommitAsync(cancellationToken);
-                }
 
                 LedgerFlowTelemetry.Add(LedgerFlowTelemetry.Transactions, "outcome", "created");
                 LedgerFlowTelemetry.Record(LedgerFlowTelemetry.ProcessingDuration, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, "operation", "transaction.create");
@@ -105,6 +104,7 @@ public sealed class TransactionService(
                 var concurrentTransaction = await transactions.GetByIdempotencyKeyAsync(normalizedKey, cancellationToken);
                 if (concurrentTransaction is not null)
                 {
+                    EnsureSameRequest(concurrentTransaction, command, normalizedCurrency);
                     return new CreateTransactionResult(concurrentTransaction, true);
                 }
 
@@ -114,13 +114,13 @@ public sealed class TransactionService(
         finally
         {
             if (databaseTransaction is not null)
-            {
                 await databaseTransaction.DisposeAsync();
+            if (inMemoryLock is not null)
+            {
+                inMemoryLock.Release();
+                if (inMemoryLock.CurrentCount == 1)
+                    InMemoryIdempotencyLocks.TryRemove(normalizedKey, out _);
             }
-
-            idempotencyLock.Release();
-            if (idempotencyLock.CurrentCount == 1)
-                IdempotencyLocks.TryRemove(normalizedKey, out _);
         }
     }
 
@@ -137,9 +137,7 @@ public sealed class TransactionService(
         var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         IDbContextTransaction? databaseTransaction = null;
         if (!db.Database.IsInMemory())
-        {
             databaseTransaction = await db.Database.BeginTransactionAsync(cancellationToken);
-        }
 
         try
         {
@@ -151,9 +149,7 @@ public sealed class TransactionService(
             await db.SaveChangesAsync(cancellationToken);
 
             if (databaseTransaction is not null)
-            {
                 await databaseTransaction.CommitAsync(cancellationToken);
-            }
 
             var transition = transaction.StateTransitions[^1];
             LedgerFlowTelemetry.Add(
@@ -179,10 +175,20 @@ public sealed class TransactionService(
         finally
         {
             if (databaseTransaction is not null)
-            {
                 await databaseTransaction.DisposeAsync();
-            }
         }
+    }
+
+    private static void EnsureSameRequest(Transaction existing, CreateTransactionCommand command, string normalizedCurrency)
+    {
+        var sameRequest =
+            string.Equals(existing.FromAccountId, command.FromAccount.Trim(), StringComparison.Ordinal) &&
+            string.Equals(existing.ToAccountId, command.ToAccount.Trim(), StringComparison.Ordinal) &&
+            existing.Amount == decimal.Round(command.Amount, 4, MidpointRounding.ToEven) &&
+            string.Equals(existing.Currency, normalizedCurrency, StringComparison.Ordinal);
+
+        if (!sameRequest)
+            throw new DomainValidationException("Idempotency-Key has already been used with a different transaction request.");
     }
 
     private void AddEvent(Transaction transaction, TransactionStatus status, string? failureReason)
@@ -193,7 +199,6 @@ public sealed class TransactionService(
             status,
             DateTimeOffset.UtcNow,
             failureReason);
-
         db.OutboxMessages.Add(new OutboxMessage(transactionEvent));
     }
 
@@ -201,7 +206,6 @@ public sealed class TransactionService(
     {
         var normalizedId = accountId.Trim();
         var account = await db.Accounts.SingleOrDefaultAsync(item => item.Id == normalizedId, cancellationToken);
-
         if (account is null)
         {
             db.Accounts.Add(new Account(normalizedId, currency));
@@ -209,37 +213,21 @@ public sealed class TransactionService(
         }
 
         if (!account.IsActive)
-        {
             throw new DomainValidationException($"Account '{normalizedId}' is inactive.");
-        }
-
         if (!string.Equals(account.Currency, currency, StringComparison.Ordinal))
-        {
             throw new DomainValidationException($"Account '{normalizedId}' uses currency {account.Currency}.");
-        }
     }
 
     private static void ValidateRequest(CreateTransactionCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.FromAccount) || string.IsNullOrWhiteSpace(command.ToAccount))
-        {
             throw new DomainValidationException("Both accounts are required.");
-        }
-
         if (command.Amount <= 0)
-        {
             throw new DomainValidationException("Amount must be positive.");
-        }
-
         if (string.IsNullOrWhiteSpace(command.Currency) || command.Currency.Trim().Length != 3)
-        {
             throw new DomainValidationException("Currency must be a 3-letter code.");
-        }
-
         if (string.IsNullOrWhiteSpace(command.IdempotencyKey))
-        {
             throw new DomainValidationException("Idempotency-Key is required.");
-        }
     }
 
     private static string NormalizeCurrency(string currency) => currency.Trim().ToUpperInvariant();
